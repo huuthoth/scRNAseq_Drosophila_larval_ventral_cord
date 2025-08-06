@@ -1,0 +1,192 @@
+---
+title: "Figure 6-motoneurons subclustering analysis"
+output: html_document
+date: "2022-04-22"
+note: The code used in this analysis is associated with the following publications: PMID: 33600085 and PMID: 38569548.
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+## List of the software and algorithms utilized in this protocol
+#R version 3.6.2
+#RStudio version 1.1.463
+#BiocManager version 3.11
+#Nebulosa version 0.99.02	
+#scran version 1.16.0
+#Seurat version 3.1
+#SingleCellExperiment version 1.10.1
+## Install and Load Packages
+library(Seurat)
+library(ggplot2)
+library(Nebulosa)
+
+
+```{r cars}
+```
+
+##Load motoneuron (MNs) sorted preprocessing data
+load(".../Twit_Sorted_normalized.RData")
+##convert sce to seurat object
+Twit_S <- as.Seurat(sce_Twit_S, counts = "counts", data = "logcounts")
+##Remove none "GFP" cells: We labeled MNs by using twit-GAl4 driving expression of UAS-NLS-GFP
+Twit_S <-subset(Twit_S, subset = `RFP-GFP` > 0, slot = 'counts')
+
+##all cell id column
+library(stringr)
+library(reprex)
+Twit_S@meta.data$sample[which(str_detect(Twit_S@meta.data$Barcode, "-1"))] <- "Twit_S"
+Twit_S$sample <-"Twit_S"
+##First we performed clustering analysis of Twit_S dataset to evaluate are there any unexpected intermixing between different celltypes
+Twit_S <- FindVariableFeatures(Twit_S, selection.method = "vst", nfeatures = 2000)
+Twit_S <- ScaleData(Twit_S, features = rownames(Twit_S))
+Twit_S <- RunPCA(Twit_S, npcs = 50, verbose = FALSE)
+Twit_S <- JackStraw(Twit_S, num.replicate = 100)
+Twit_S <- ScoreJackStraw(Twit_S, dims = 1:20)
+JackStrawPlot(Twit_S, dims = 1:20)
+ElbowPlot(Twit_S, ndims = 50)
+Twit_S <- FindNeighbors(Twit_S, reduction = "pca", dims = 1:12)
+Twit_S <- RunUMAP(Twit_S, reduction = "pca", dims = 1:12)
+Twit_S <- RunTSNE(Twit_S, reduction = "pca", dims = 1:12)
+Twit_S <- FindClusters(Twit_S, resolution = 0.4)
+DimPlot(Twit_S, reduction = "umap", label = TRUE)
+DimPlot(Twit_S, reduction = "tsne", label = TRUE)
+
+##we visualized the expression of different neuropeptides which is know only expressionin twit_S in handful of twit positive cells, to identify contaminate clusters
+VlnPlot(Twit_S, features = c("CCAP", "Burs", "Orcokinin","Capa", "Lk"), pt.size = 0.0, combine = TRUE, ncol = 1)
+## We found cluster 0 and 1 are doublet cluster, we remove these cluster for our further analysis
+Twit_S <- SubsetData(Twit_S, ident.remove = c(0, 1), assay="RNA") #943 cells
+DimPlot(Twit_S, reduction = "tsne", label = TRUE)
+
+##We further clean up this dataset my remove other unwanted cells
+Twit_S <-subset(Twit_S, subset = elav > 0, slot = 'counts') #keep neuronal cells
+Twit_S<-subset(Twit_S, subset = repo > 0, slot = 'counts', invert = TRUE) #remove MN cells
+
+Twit_S<-subset(Twit_S, subset = wrapper > 0, slot = 'counts', invert = TRUE) #remove MN cells
+##
+setwd("~.../MN")
+saveRDS(Twit_S, file = "Twit_S_clean.rds")
+
+
+##Load Seurat_VNCs object and subset MN cluster
+setwd("~.../Seurat_VNCs")
+Seurat_VNCs <- readRDS("Seurat_VNCs.rds")
+
+##Subset MN clusters
+MN_UnSort <- SubsetData(Seurat_VNCs, ident.use = c(Motor neurons), assay="RNA") 
+
+DefaultAssay(MN_UnSort) <- "RNA"
+
+##remove unwanted cells
+
+MN_UnSort<-subset(MN_UnSort, subset = `elav` > 0, slot = 'counts') #542  cells
+
+MN_UnSort<-subset(MN_UnSort, subset = repo > 0, slot = 'counts', invert = TRUE) #  536 cells
+
+MN_UnSort<-subset(MN_UnSort, subset = wrapper > 0, slot = 'counts', invert = TRUE) #536
+
+saveRDS(MN_UnSort, file = "MN_UnSort.rds")
+MN_UnSort <- readRDS("MN_UnSort.rds")
+
+##add sorting column
+
+MN_UnSort$Sorting <- "Unsorted"
+
+Twit_S$Sorting <-"Sorted"
+
+
+##merge MN sorted and unsorted datasets
+
+MN.combined <- merge(Twit_S, y = MN_UnSort, add.cell.ids = c("Sorted", "Unsorted"), project = "MNs")
+
+
+##split MN.combined object by sample
+split_MN <- SplitObject(MN, split.by = "sample")
+split_MN <- split_MN[c("VNC1", "VNC2", "VNC3", "VNC4", "VNC5", "Twit_S")]
+
+## find variable features
+for (sample_name in names(split_MN)) {
+  message("Processing: ", sample_name)
+  split_MN[[sample_name]] <- FindVariableFeatures(
+    split_MN[[sample_name]], 
+    selection.method = "vst", 
+    nfeatures = 1000, 
+    verbose = FALSE
+  )
+}
+
+## select features that are repeatedly variable across datasets for integration
+features <- SelectIntegrationFeatures(object.list = split_MN)
+
+## Perform integration
+MN.anchors <- FindIntegrationAnchors(object.list = split_MN, dims = 1:30)
+
+## create list of common genes to keep
+to_integrate <- Reduce(intersect, lapply(MN.anchors@object.list, rownames))
+
+## integrate data and keep full geneset
+MN.integrated <- IntegrateData(anchorset = MN.anchors)
+
+DefaultAssay(MN) <- "integrated"
+
+##Scale, dimensionality reduction, and clustering analysis
+MN.integrated <- ScaleData(MN, features = rownames(MN))
+
+MN.integrated <- RunPCA(MN.integrated, ndims.print = 1:30, nfeatures.print = 30, npcs = 100)
+
+DimHeatmap(MN.integrated, dims = 1:12, cells = 100, balanced = TRUE)
+DimHeatmap(MN.integrated, dims = 13:25, cells = 100, balanced = TRUE)
+DimHeatmap(MN.integrated, dims = 40:55, cells = 100, balanced = TRUE)
+
+MN.integrated <- JackStraw(MN1, num.replicate = 100)
+MN.integrated <- ScoreJackStraw(MN1, dims = 1:20)
+JackStrawPlot(MN.integrated, dims = 1:20)
+
+ElbowPlot(MN.integrated, ndims = 50)
+
+MN.integrated <- FindNeighbors(MN.integrated, reduction = "pca", dims = 1:35)
+MN.integrated <- RunUMAP(MN.integrated, reduction = "pca", dims = 1:35)
+MN.integrated <- RunTSNE(MN.integrated, reduction = "pca", dims = 1:35)
+
+##Investigating Cluster Separation at Different Resolutions using clustree Package and silhouette metric
+MN.integrated <- FindClusters(MN.integrated, resolution = c(0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5,  5.0, 5.5, 6.0 ))
+
+##clustree
+library(clustree)
+clustree(MN.integrated)
+
+## silhouette metric
+library(cluster, quietly = TRUE)
+a<-Embeddings(object = MN.integrated, reduction = "tsne")
+dist.matrix <- dist(x = a)
+clusters <- MN.integrated$seurat_clusters
+sil <- silhouette(x = as.numeric(x = as.factor(x = clusters)), dist = dist.matrix)
+plot(sil)
+plot(sil, col = heat.colors(46))
+
+## We decided to use resolution 4.0 for our data
+MN.integrated <- FindClusters(MN.integrated, resolution = 4.0)
+
+DimPlot(MN.integrated, reduction = "tsne", pt.size = 0.9, label = TRUE, label.size = 7)
+
+
+##find marker
+MN.markers <- FindAllMarkers(object = MN.integrated, 
+                                      only.pos = TRUE, logfc.threshold = 0.05, assay = 'RNA')
+library(readxl)
+library(openxlsx)
+
+DoHeatmap(subset(MN.integrated, downsample = 100), features = top10$gene, disp.min = -1.0, disp.max = 1.0) 
+
+ggsave(paste0("~/Desktop/ScRNA seq paper", "in-heat-res1.5.0.png"), height = 116, width = 46, unit = "cm",
+       device = "png", dpi = 600)
+
+##saveRDS
+setwd(".../VNC_atlas")
+
+saveRDS(MN.integrated, file = "MN_VNC.rds")
+
+
+
+
+

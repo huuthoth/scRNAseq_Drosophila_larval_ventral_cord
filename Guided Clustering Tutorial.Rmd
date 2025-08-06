@@ -1,0 +1,86 @@
+---
+title: "Guided Clustering Tutorial"
+output: html_document
+date: "2025-08-03"
+note: These codes associated with paper PMID: 33600085 and PMID: 38569548
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+## List of the software and algorithms utilized in this protocol
+#R version 3.6.2
+#RStudio version 1.1.463
+#BiocManager version 3.11
+#scater version 1.16.2	
+#DropletUtils version 1.8.0
+#scran version 1.16.0
+#Seurat version 3.1
+#SingleCellExperiment version 1.10.1
+## Install and Load Packages
+if (!requireNamespace("BiocManager", quietly = TRUE))
+  install.packages("BiocManager")
+
+BiocManager::install(c("sva", "scater", "scRNAseq", "DropletUtils", "scran", "irlba", "biomaRt"))
+install.packages(c("dplyr", "dbplyr", "ggplot2", "data.table"))
+install.packages(“ggplot2”)
+library(scater)
+library(scater)
+library(scRNAseq)
+library(DropletUtils)
+library(dplyr)
+library(dbplyr)
+library(ggplot2)
+library(data.table)
+library(scran)
+library(biomaRt)
+library(ggplot2)
+
+
+```{r cars}
+```
+### Add sample ID column into metadata:Once you created Seurat objects, use stringr package to add sample ID column into metadata position. This will allow you to trace back which cell came from which sample.
+library(stringr)
+Seurat_VNC@meta.data$sample[which(str_detect(Seurat_VNC@meta.data$Barcode,"−1"))] <- "VNC1"
+
+##Identification of highly variable features (feature selection)
+Seurat_VNC <- FindVariableFeatures(Seurat_VNC, selection.method = "vst", nfeatures = 2000)
+top30 <- head(VariableFeatures(Seurat_VNC), 30)
+plot1 <- VariableFeaturePlot(Seurat_VNC)
+LabelPoints(plot = plot1, points = top30, repel = TRUE, xnudge = 0, ynudge =0)
+
+##Integrate samples using shared highly variable genes
+## Perform integration sample
+VNC.anchors <- FindIntegrationAnchors(object.list = list(Seurat_VNC1, Seurat_VNC2, Seurat_VNC3, Seurat_VNC4, Seurat_VNC5), dims = 1:30)
+## create list of common genes to keep
+to_integrate <- Reduce(intersect, lapply(VNC.anchors@object.list, rownames))
+## integrate data and keep full geneset
+Seurat_VNCs <- IntegrateData(anchorset = VNC.anchors, features.to.integrate = to_integrate, dims = 1:30)
+
+## Scaling the data
+DefaultAssay(Seurat_VNCs) <- "integrated"
+Seurat_VNCs <- ScaleData(Seurat_VNCs, features = rownames(Seurat_VNCs))
+
+## Principal Components Analysis
+Seurat_VNCs <- RunPCA(Seurat_VNCs, npcs = 40, verbose = FALSE)
+ElbowPlot(Seurat_VNCs, ndims = 40)
+VizDimLoadings(Seurat_VNCs, dims = 1:21, reduction = "pca")
+DimPlot(Seurat_VNCs, reduction = "pca")
+DimHeatmap(Seurat_VNCs, dims = 1:21, cells = 100, balanced = TRUE)
+Seurat_VNCs <- JackStraw(Seurat_VNCs, num.replicate = 100)
+Seurat_VNCs <- ScoreJackStraw(Seurat_VNCs, dims = 1:20)
+JackStrawPlot(Seurat_VNCs, dims = 1:20)
+##Note: We then examined the metagenes individually using the VizDimLoading and DimHeatmap functions and found that the first 19 PCs are sufficient to capture enough biological variability to identify different cell types in our system
+
+## 2D dimensionality reduction
+Seurat_VNCs <- RunTSNE(Seurat_VNCs, reduction = "pca", dims = 1:19)
+DimPlot(Seurat_VNCs, reduction = "tsne", label = FALSE, group.by = "sample")
+Seurat_VNCs <- RunUMAP(Seurat_VNCs, reduction = "pca", dims = 1:19)
+DimPlot(Seurat_VNCs, reduction = "umap", label = FALSE, group.by = "sample")
+
+## Determine the K-nearest neighbor graph
+Seurat_VNCs <- FindNeighbors(Seurat_VNCs, reduction = "pca", dims = 1:19)
+Seurat_VNCs <- FindClusters(Seurat_VNCs, resolution = 0.3)
+DimPlot(Seurat_VNCs, reduction = "umap", label=TRUE)
+DimPlot(Seurat_VNCs, reduction = "umap", label = TRUE, split.by = "sample")
+

@@ -1,0 +1,200 @@
+---
+title: "Sample processing from CellRanger output"
+output: html_document
+date: "2021-08-03"
+note: These codes associated with paper PMID: 33600085 and PMID: 38569548
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+## List of the software and algorithms utilized in this protocol
+#R version 3.6.2
+#RStudio version 1.1.463
+#BiocManager version 3.11
+#scater version 1.16.2	
+#DropletUtils version 1.8.0
+#scran version 1.16.0
+#Seurat version 3.1
+#SingleCellExperiment version 1.10.1
+## Install and Load Packages
+if (!requireNamespace("BiocManager", quietly = TRUE))
+  install.packages("BiocManager")
+
+BiocManager::install(c("sva", "scater", "scRNAseq", "DropletUtils", "scran", "irlba", "biomaRt"))
+install.packages(c("dplyr", "dbplyr", "ggplot2", "data.table"))
+install.packages(“ggplot2”)
+library(scater)
+library(scater)
+library(scRNAseq)
+library(DropletUtils)
+library(dplyr)
+library(dbplyr)
+library(ggplot2)
+library(data.table)
+library(scran)
+library(biomaRt)
+library(ggplot2)
+
+
+```{r cars}
+```
+
+## Barcode Rank Plot
+
+bcrank <- barcodeRanks(counts(sce_VNC))
+
+## Only show unique points for plotting; identify knee and inflection
+uniq <- !duplicated(bcrank$rank)
+
+plot(bcrank$rank[uniq], bcrank$total[uniq], log="xy",
+     xlab="Rank", ylab="Total UMI count", cex.lab=1.2)
+
+abline(h=metadata(bcrank)$inflection, col="darkgreen", lty=2)
+abline(h=metadata(bcrank)$knee, col="dodgerblue", lty=2)
+
+legend("bottomleft", legend=c("Inflection", "Knee"), 
+       col=c("darkgreen", "dodgerblue"), lty=2, cex=1.2)
+
+##  Identify Empty Droplets
+set.seed(100)
+e.out <- emptyDrops(counts(sce_VNC))
+summary(e.out$FDR <= 0.001)
+table(Sig = e.out$FDR <= 0.001, Limited = e.out$Limited)
+
+## Histogram for low total counts
+limit <- 100
+all.out <- emptyDrops(counts(sce_VNC), lower = limit, test.ambient = TRUE)
+hist(all.out$PValue[all.out$Total <= limit & all.out$Total > 0],
+     xlab = "P-value", main = "", col = "grey80")
+
+## Filter
+sce_VNC <- sce_VNC[, which(e.out$FDR <= 0.001)]
+dim(sce_VNC)
+
+## Definition of mitochondrial and ribosomal, and heatshock groups of genes as features of interest. Please note that the “mito,” “ribo,” and “hsp” descriptors are Drosophila-specific, and the command line is inappropriate for other species
+is.mito <- grep("^mt:", rowData(sce_VNC)$Symbol)
+is.ribo <- grep("^Rp[SL]", rowData(sce_VNC)$Symbol)
+is.heatshock <- grep("^Hsp", rowData(sce_VNC)$Symbol)
+length(is.mito)
+length(is.ribo)
+length(is.heatshock)
+
+## CalculateQCMetrics to evaluate % of mitochondrial, ribosomal and heatshock related genes for each cell
+
+sce_VNC <- calculateQCMetrics(sce_VNC, feature_controls = list(Mt = is.mito, Ri = is.ribo, Hs = is.heatshock))
+colnames(colData(sce_VNC))
+
+## Calculate log10GenesPerUMI
+sce_VNC$log10GenesPerUMI <- log10(sce_VNC$total_features_by_counts) / log10(sce_VNC$total_counts)
+
+## plot the distribution of the number of total counts
+qplot(sce_VNC$total_counts, geom="histogram", binwidth = 500, xlab = "# ofcounts", ylab = "# of cells",
+      fill=I("#00ABFD"), col=I("black"))+ theme_light(base_size = 22)
+
+## plot the distribution of the log10-transformed number of total counts
+qplot(log10(sce_VNC$total_counts), geom="histogram", binwidth = 0.05, xlab ="log10(# of counts)", ylab = "# of
+      cells", fill=I("#00ABFD"), col=I("black"))+ theme_light(base_size = 22)
+
+## plot the distribution of the total number of genes
+qplot(sce_VNC$total_features_by_counts, geom="histogram", binwidth = 75, xlab= "# of genes", ylab = "# of cells",
+    fill=I("#00ABFD"), col=I("black"))+ theme_light(base_size = 22)+geom_vline(xintercept=500, color="red", size=1)
+
+## plot the distribution of the log10-transformed of total number of genes
+qplot(log10(sce_VNC$total_features_by_counts), geom="histogram", binwidth =0.01, xlab = "log10(# of genes)", ylab =
+       "# of cells", fill=I("#00ABFD"), col=I("black"))+ theme_light(base_size= 22)
+
+## plot the distribution of the log10-transformed total number of genes per UMI
+sce_VNC$log10GenesPerUMI <- log10(sce_VNC$total_features_by_counts) / log10(sce_VNC$total_counts)
+
+qplot(sce_VNC$log10GenesPerUMI, geom="density", binwidth = 0.005, xlab = "log10(# ofgenes/# of counts)", ylab =
+       "density", fill=I("#00ABFD"), col=I("black"))+ theme_light(base_size =22)+ geom_vline(xintercept=0.8,
+       color="red", size=1)
+
+## removal barcodes/cells with total number genes<500 and log10(Genes/UMI)<0.8
+total_features_by_counts.drop <- sce_VNC$total_features_by_counts >=500
+total_features_by_counts.remove <- sce_VNC$total_features_by_counts <500
+sce_VNC <- sce_VNC[, total_features_by_counts.drop]
+log10GenesPerUMI.drop <- sce_VNC$log10GenesPerUMI >=0.8
+log10GenesPerUMI.remove <- sce_VNC$log10GenesPerUMI < 0.8
+sce_VNC <- sce_VNC[, log10GenesPerUMI.drop]
+
+### plot the distribution of the mitochondrial proportion
+qplot(sce_VNC$pct_counts_Mt, geom="histogram", binwidth = 0.5, xlab ="Mitochondrial prop. (%)", ylab = "# of cells",
+      fill=I("#00ABFD"), col=I("black"))+ theme_light(base_size = 22)
+
+## plot the distribution of the ribosomal proportion
+qplot(sce_VNC$pct_counts_Ri, geom="histogram", binwidth = 0.5, xlab ="Ribosome prop. (%)",ylab = "# of cells", fill=I("#00ABFD"),           col=I("black"))+ theme_light(base_size = 22)
+
+## plot the ribosomal proportion vs mitochondrial proportion
+smoothScatter(sce_VNC$pct_counts_Ri, sce_VNC$pct_counts_Mt,xlab="Ribosomeprop. (%)", ylab="Mitochondrial prop. (%)",
+           nrpoints=500, cex.axis = 1.5, cex.lab = 1.8)
+abline(h=18, lty=1, col="red")
+abline(v=5, lty=1, col="red")
+
+## removal barcodes/cells with a mitochondrial % fraction >18 and a ribosomal % fraction <5
+mito.drop <- sce_VNC$pct_counts_Mt <=18
+mito.remove <- sce_VNC$pct_counts_Mt > 18
+sce_VNC <- sce_VNC[, mito.drop]
+
+ribo.drop <- sce_VNC$pct_counts_Ri >= 5
+ribo.remove <- sce_VNC$pct_counts_Ri < 5
+sce_VNC <- sce_VNC[, ribo.drop]
+
+## summarize gene-level information
+min(rowData(sce_VNC)$mean_counts)
+min(rowData(sce_VNC)$mean_counts[rowData(sce_VNC)$mean_counts>0])
+min(rowData(sce_VNC)$n_cells_by_counts)
+
+par(mfrow=c(1,3), mar=c(5,4,1,1))
+hist(log10(rowData(sce_VNC)$mean_counts+1e-6), col="grey80", main="",
+     breaks=40, xlab="log10(ave # of UMI + 1e-6)")
+hist(log10(rowData(sce_VNC)$n_cells_by_counts+1), col="grey80", main="",
+     breaks=40, xlab="log10(# of expressed cells + 1)")
+smoothScatter(log10(rowData(sce_VNC)$mean_counts+1e-6),
+              log10(rowData(sce_VNC)$n_cells_by_counts + 1),
+              xlab="log10(ave # of UMI + 1e-6)",
+              ylab="log10(# of expressed cells + 1)")
+tb1 = table(rowData(sce_VNC)$n_cells_counts)
+tb1[1:11]
+
+## remove genes expressed in fewer than 0.1% of total cells
+sce_VNC = sce_VNC[which(rowData(sce_VNC)$n_cells_by_counts > 6),]
+dim(sce_ VNC1)
+
+## identify highly expressed genes
+par(mar=c(6,6,6,6))
+od1 = order(rowData(sce_VNC)$mean_counts, decreasing = TRUE)
+      barplot(rowData(sce_VNC)$mean_counts[od1[20:1]], las=1, \
+      names.arg=rowData(sce_VNC)$Symbol[od1[20:1]], horiz=TRUE,
+col="steelblue", cex.names=1,
+      cex.axis=1, xlab="ave # of UMI")
+
+min(rowData(sce_RP2)$mean_counts)
+min(rowData(sce_RP2)$mean_counts[rowData(sce_RP2)$mean_counts>0])
+min(rowData(sce_RP2)$n_cells_by_counts)
+
+##Normalization by deconvolution
+set.seed(100)
+clust.sce_VNC<- quickCluster(sce_RP2)
+sce_VNC <- computeSumFactors(sce_VNC, cluster=clust.sce_VNC, min.mean=0.1)
+par(mar=c(6,6,6,6))
+plot(sce_VNC$total_counts, sizeFactors(sce_VNC), log="xy",
+     xlab="total counts", ylab="size factors", cex.axis = 1.2, cex.lab = 1.2,
+cex=0.8, pch=20,
+     col=rgb(0.1,0.2,0.7,0.3))
+sce_VNC <- logNormCounts(sce_VNC)
+assayNames(sce_VNC)
+
+## assignment gene symbol from rowname
+rownames(sce_VNC) <- rowData(sce_VNC)$Symbol
+head(rownames(sce_VNC))
+
+##save file
+save.image("~/Desktop/my_analysis/sce_VNC_normalized.RData")
+
+##Conversion from sce objects to Seurat objects
+sce_VNC<- as.Seurat(sce_VNC, counts = "counts", data = "logcounts")
+
+
+

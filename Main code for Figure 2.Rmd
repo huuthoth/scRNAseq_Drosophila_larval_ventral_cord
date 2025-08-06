@@ -1,0 +1,348 @@
+---
+title: "Figure 2"
+output: html_document
+date: "2021-06-01"
+note: The code used in this analysis is associated with the following publications: PMID: 33600085 and PMID: 38569548.
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+## List of the software and algorithms utilized in this protocol
+#R version 3.6.2
+#RStudio version 1.1.463
+#BiocManager version 3.11
+#monocle version 2.14.0
+#slingshot version 1.4.0	
+#destiny version 3.0.1	
+#Nebulosa version 0.99.02	
+#scran version 1.16.0
+#Seurat version 3.1
+#SingleCellExperiment version 1.10.1
+## Install and Load Packages
+library(Seurat)
+library(ggplot2)
+library(monocle)
+library(destiny)
+library(Nebulosa)
+
+
+```{r cars}
+```
+
+##Load Seurat_VNCs
+setwd("~.../Seurat_VNCs")
+Seurat_VNCs <- readRDS("Seurat_VNCs.rds")
+
+##Subset developmental trajectory (including clusters "NBs", "GCMs", "Hey", "secondary low Imp neurons" and "secondary high Imp neurons")
+TJ <- subset(Seurat_VNCs, idents = c("NBs", "GCMs", "Hey", "secondary low Imp neurons" and "secondary high Imp neurons"))  
+
+DefaultAssay(TJ) <- "RNA"
+
+##remove unwanted cells
+##contaminated glia
+TJ<-subset(TJ, subset = repo > 0, slot = 'counts', invert = TRUE) #17472
+
+TJ<-subset(TJ, subset = wrapper > 0, slot = 'counts', invert = TRUE) #16448
+##contaminated trachea
+TJ<-subset(TJ, subset = verm > 0, slot = 'counts', invert = TRUE) #16385
+
+##split TJ object by sample
+split_TJ <- SplitObject(TJ, split.by = "sample")
+split_TJ <- split_TJ[c("VNC1", "VNC2", "VNC3", "VNC4", "VNC5")]
+
+## Find variable features
+for (sample_name in names(split_TJ)) {
+  message("Processing: ", sample_name)
+  
+  split_TJ[[sample_name]] <- FindVariableFeatures(
+    split_TJ[[sample_name]], 
+    selection.method = "vst", 
+    nfeatures = 1000, 
+    verbose = FALSE
+  )
+}
+
+## select features that are repeatedly variable across datasets for integration
+features <- SelectIntegrationFeatures(object.list = split_TJ)
+
+## Perform integration
+TJ.anchors <- FindIntegrationAnchors(object.list = split_TJ, dims = 1:30)
+
+## create list of common genes to keep
+to_integrate <- Reduce(intersect, lapply(TJ.anchors@object.list, rownames))
+
+## integrate data and keep full geneset
+TJ.integrated <- IntegrateData(anchorset = TJ.anchors)
+
+DefaultAssay(TJ) <- "integrated"
+
+##Scale, dimensionality reduction, and clustering analysis
+TJ.integrated <- ScaleData(TJ, features = rownames(TJ))
+
+TJ.integrated <- RunPCA(TJ.integrated, features = TJ.integrated@assays$integrated@var.features,
+                                 ndims.print = 1:30, nfeatures.print = 30, npcs = 100)
+
+DimHeatmap(TJ.integrated, dims = 1:12, cells = 100, balanced = TRUE)
+DimHeatmap(TJ.integrated, dims = 13:25, cells = 100, balanced = TRUE)
+DimHeatmap(TJ.integrated, dims = 40:55, cells = 100, balanced = TRUE)
+
+TJ.integrated <- JackStraw(TJ1, num.replicate = 100)
+TJ.integrated <- ScoreJackStraw(TJ1, dims = 1:20)
+JackStrawPlot(TJ.integrated, dims = 1:20)
+
+ElbowPlot(TJ.integrated, ndims = 50)
+
+TJ.integrated <- RunUMAP(TJ.integrated, reduction = "pca", dims = 1:6)
+
+TJ.integrated <- RunTSNE(TJ.integrated, reduction = "pca", dims = 1:6)
+
+TJ.integrated <- FindNeighbors(TJ.integrated, reduction = "pca", dims = 1:6)
+
+TJ.integrated <- FindClusters(TJ.integrated, resolution = 0.6)
+
+DimPlot(TJ.integrated, reduction = "umap", label = TRUE)
+DimPlot(TJ.integrated, reduction = "umap", label = TRUE, split.by = "sample")
+
+plot_density(TJ.integrated, "VGlut", reduction = "umap")
+plot_density(TJ.integrated, "ChAT", reduction = "umap")
+plot_density(TJ.integrated, "Gad1", reduction = "umap")
+plot_density(TJ.integrated, "Hey", reduction = "umap")
+
+##
+setwd("~.../TJ.integrated")
+
+saveRDS(TJ.integrated, file = "TJ.integrated.rds")
+
+TJ <- readRDS("TJ.integrated.rds")
+
+##Different expression analysis
+TJ.markers <- FindAllMarkers(TJ.integrated, logfc.threshold = 0.25, test.use = "wilcox", assay="RNA")
+
+##Figure 2A. UMAP plot
+##Figure 1B: create a UMAP plot with customized colors 
+DimPlot(object = TJ.integrated, reduction = 'umap', label = T,
+        cols = c('10' = 'mediumorchid1',
+                 "7"= "forestgreen", 
+                 "1"= "deeppink",
+                 
+                 "5"= "greenyellow",
+                 "2"="chartreuse3", 
+                 "9"="tomato",
+                 "4"="turquoise3",
+                 "3"="deepskyblue1",
+                 "8"="magenta1",
+                 "6"='slateblue1',
+                 "0"= "dodgerblue1"),  pt.size = 0.5,  label.size = 7)
+
+##save UMAP plot
+ggsave(paste0("~.../", "Fig_2A_UMAP.png"), height = 6, width = 10, unit = "in",
+       device = "png", dpi = 600)
+       
+##########Pseudotime analysis###########
+##convert to sce object
+sce_Trajectory<-as.SingleCellExperiment(TJ.integrated)
+rm(TJ.integrated)
+pca <- reducedDim(sce_Trajectory, "PCA")
+dim(pca)
+## Add PCA data to the sce_Trajectory object.
+sce_Trajectory$PC1 <- pca[, 1]
+sce_Trajectory$PC2 <- pca[, 2]
+
+ggplot(as.data.frame(colData(sce_Trajectory)), aes(x = PC1, y = PC2, color = ident)) + geom_quasirandom(groupOnX = FALSE)  + theme_classic() +
+  xlab("PC1") + ylab("PC2") + ggtitle("PC biplot")
+
+## use PCA As a simple measure of pseudotime.
+sce_Trajectory$pseudotime_PC2 <- rank(sce_Trajectory$PC2)  # rank cells by their PC1 score
+ggplot(as.data.frame(colData(sce_Trajectory)), aes(x = pseudotime_PC2, y = ident, colour = ident)) + geom_quasirandom(groupOnX = FALSE)+ theme_classic() + xlab("PC1") + ylab("Timepoint") + ggtitle("Cells ordered by first principal component")
+
+
+##  Prepare a counts matrix with labeled rows and columns.
+countmatrix <- logcounts(sce_Trajectory)  
+cellLabels <- sce_Trajectory$ident
+colnames(countmatrix) <- cellLabels
+countmatrix<-as.data.frame(countmatrix)
+
+#install and load destiny
+# Make a diffusion map. using destiny
+library(destiny)
+dm <- DiffusionMap(t(countmatrix))
+saveRDS(dm, file = "032021-dm.rds")
+sigmas <- find_sigmas(t(countmatrix), verbose = FALSE)
+op_dm <- DiffusionMap(t(countmatrix), sigma = optimal_sigma(sigmas))
+#Warning message:
+saveRDS(op_dm, file = "dm.rds")
+dm <- readRDS("dm.rds")
+
+sce_Trajectory$pseudotime_diffusionmap <- rank(eigenvectors(dm)[,1])    # rank cells by their dpt
+p <-ggplot(as.data.frame(colData(sce_Trajectory)),
+       aes(x = pseudotime_diffusionmap,
+           y = sce_Trajectory$seurat_clusters, colour = ident)) +
+  geom_quasirandom(groupOnX = FALSE) +
+  theme_classic() +
+  xlab("Diffusion component 1 (DC1)") + ylab("Timepoint") +
+  ggtitle("Cells ordered by DC1")
+q <- p +scale_color_manual(values=c("mediumorchid1", 
+                                    "forestgreen", "dodgerblue2", 
+                                    "greenyellow", "olivedrab3", "deeppink",
+                                    "turquoise3", "tomato", "magenta1",  "turquoise2"))
+                                    
+
+##Slingshot
+library(slingshot)
+library(Seurat)
+##used this
+sce_Trajectory <- slingshot(sce_Trajectory, clusterLabels = "ident", reducedDim ='PCA', start.clus=10, end.clus = 0)
+
+saveRDS(sce_Trajectory, file = "sce_Trajectory_slingshot.rds")
+sce_Trajectory <- readRDS(".../sce_Trajectory_slingshot.rds")
+
+# Plot PC1 vs PC2 colored by Slingshot pseudotime.
+colors <- c("mediumorchid1", "forestgreen", "dodgerblue2", "magenta4", "darkgoldenrod1", "green3", "deeppink","tomato", "turquoise2", "blue",'red')
+
+plot(reducedDims(sce_Trajectory)$PCA, col = colors[cut(sce_Trajectory$slingPseudotime_1,breaks=50)], pch=16, asp = 1)
+lines(SlingshotDataSet(sce_Trajectory), lwd=2)
+
+# Plot Slingshot pseudotime vs cell stage.
+ggplot(as.data.frame(colData(sce_Trajectory)), aes(x = slingPseudotime_1, y = ident,
+                                                   colour = ident)) +
+  geom_quasirandom(groupOnX = FALSE) +
+  theme_classic() +
+  xlab("Slingshot pseudotime") + ylab("Timepoint") +
+  ggtitle("Cells ordered by Slingshot pseudotime")
+
+ggsave(paste0("~/", "Sling_DM.png"), height = 5, width = 7, unit = "in",
+       device = "png", dpi = 600)
+
+##monocle:
+library(monocle)
+#create fData and fd
+#Extract data, phenotype data, and feature data from the SceObject
+data <- as.matrix(sce_Trajectory@assays@data@listData)
+
+head(data[[1]])
+
+#create fData and fd: OK
+fData <- data.frame(gene_short_name = row.names(data[[1]]), row.names = row.names(data[[1]]))
+head(fData)
+fd <- new('AnnotatedDataFrame', data = fData)
+head(fd)
+rownames(fd)
+
+#create pd data
+pd <- new("AnnotatedDataFrame", data = data.frame(colData(sce_Trajectory), byrow= TRUE))
+
+head(pd)
+rownames(pd)
+
+
+#
+Trajectory_monocle <- newCellDataSet(data[[1]],
+                       phenoData = pd,
+                       featureData = fd,
+                       expressionFamily = uninormal())
+
+# since I have already normalized, thresholded and scalled in Suerat v3.0.0.9150
+Trajectory_monocle <- estimateSizeFactors(Trajectory_monocle)
+
+Trajectory_monocle <- detectGenes(Trajectory_monocle, min_expr = 0.1)
+
+print(head(fData(Trajectory_monocle)))
+
+
+#
+#View data
+pData(Trajectory_monocle)
+fData(Trajectory_monocle)
+
+
+#Run ordering algorithm
+var_genes <- Trajectory[["RNA"]]@var.features
+ordering_genes <- var_genes
+
+Trajectory_monocle <- setOrderingFilter(Trajectory_monocle, ordering_genes)
+print(dim(exprs(Trajectory_monocle)))
+
+Trajectory_monocle <- reduceDimension(Trajectory_monocle,norm_method="none", 
+                        reduction_method="DDRTree",
+                        max_components=2,
+                        scaling=TRUE,
+                        verbose=TRUE,
+                        pseudo_expr=0)
+
+# First decide what you want to color your cells by
+print(head(pData(Trajectory_monocle)))
+
+## order cells change colors and theta to match your plot
+Trajectory_monocle <- orderCells(Trajectory_monocle)
+plot_cell_trajectory(Trajectory_monocle, 
+                     color_by = "seurat_clusters",
+                     theta = -15,
+                     show_branch_points = FALSE,
+                     show_tree = TRUE,
+                     cell_size = 0.3) + scale_fill_continuous(type = "viridis")
+#
+plot_cell_trajectory(Trajectory_monocle, color_by = "Pseudotime", cell_size = 0.3)
+Trajectory_monocle <- orderCells(Trajectory_monocle, root_state = 2);
+
+##structure 
+print(head(pData(Trajectory_monocle)))
+
+##plot gene
+Trajectory_monocle_filtered <- Trajectory_monocle[Trajectory_monocle_expressed_genes,]
+my_genes <- row.names(subset(fData(Trajectory_monocle_filtered),
+                             gene_short_name %in% c("pros", "dati", "zld")))
+cds_subset <- Trajectory_monocle_filtered[my_genes,]
+plot_genes_in_pseudotime(cds_subset, color_by = "seurat_clusters")
+
+
+##Comparison of the different trajectory inference methods
+
+##How do the trajectories inferred by PCA, diffusion pseudotime, and slingshot pseudotime compare to one another?
+
+install.packages("corrplot")
+library(corrplot)
+
+## Prepare data frame with different pseudotime measures.
+df_pseudotime <- as.data.frame(pData(Trajectory_monocle)[, c("pseudotime_PC1", "pseudotime_diffusionmap", "slingPseudotime_1", "Pseudotime")])
+
+
+colnames(df_pseudotime) <- c("diffusion", "slingshot", "monocle") # you can use only PC1 and slingshot
+
+## Plotting the Correlation Between Different Pseudotime Measures
+corrplot.mixed(abs(cor(df_pseudotime, use = "na.or.complete")),
+               order = "hclust", tl.col = "black",
+               main = "Correlation matrix for pseudotime results",
+               mar = c(0, 0, 3.1, 0))
+
+dev.off()
+ggsave(paste0("~/Desktop/ScRNA seq paper", "cor.png"), height = 4, width = 5, unit = "in",
+       device = "png", dpi = 600)
+
+## Plotting the Correlation Between Different Pseudotime Measures
+corrplot.mixed(abs(cor(df_pseudotime, use = "na.or.complete")),
+               order = "hclust", tl.col = "black",
+               main = "Correlation matrix for pseudotime results",
+               mar = c(0, 0, 3.1, 0))
+
+
+##plot_multiple genes_pseudotime
+
+TJ.seurat <- as.Seurat(sce_Trajectory, counts = "counts", data = "logcounts")
+
+exp <- t(TJ.seurat@assays[["RNA"]]@data)
+
+genes.pseudotime <- merge(exp, TJ.seurat@meta.data, by = 0)
+
+genes.pseudotime.plot <- ggplot(genes.pseudotime, aes(slingPseudotime_2)) + 
+  geom_smooth(aes(y=dpn), alpha = 0, col = "#4E94D0") + 
+  geom_smooth(aes(y=pros), alpha = 0, col = "#43CF81") +
+  geom_smooth(aes(y=Syp), alpha = 0, col = "#E96060") +
+  ylim(0, 5) +
+  labs(x = "Pseudotime", y = "gene expression") + 
+  scale_x_continuous(breaks = c(0, 0.5, 1)) +
+  theme_minimal() + 
+  theme(panel.grid.minor = element_blank(), panel.grid.major.x = element_blank())
+  
+
+

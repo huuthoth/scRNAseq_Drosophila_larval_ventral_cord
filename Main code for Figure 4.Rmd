@@ -1,0 +1,252 @@
+---
+title: "Figure 4-Interneuron subclustering analysis"
+output: html_document
+date: "2021-06-01"
+note: The code used in this analysis is associated with the following publications: PMID: 33600085 and PMID: 38569548.
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+## List of the software and algorithms utilized in this protocol
+#R version 3.6.2
+#RStudio version 1.1.463
+#BiocManager version 3.11
+#Nebulosa version 0.99.02	
+#scran version 1.16.0
+#Seurat version 3.1
+#SingleCellExperiment version 1.10.1
+## Install and Load Packages
+library(Seurat)
+library(ggplot2)
+library(Nebulosa)
+
+
+```{r cars}
+```
+
+##Load Seurat_VNCs
+setwd("~.../Seurat_VNCs")
+Seurat_VNCs <- readRDS("Seurat_VNCs.rds")
+
+##Subset interneuron cluster
+Interneurons <- subset(Seurat_VNCs, idents = c("Interneurons"))  
+
+DefaultAssay(Interneurons) <- "RNA"
+
+##remove non-neuronal cells
+Interneuron<-subset(Interneuron, subset = `elav` > 0, slot = 'counts') #6475 cells
+Interneurons<-subset(Interneurons, subset = repo > 0, slot = 'counts', invert = TRUE) 
+
+Interneurons<-subset(Interneurons, subset = wrapper > 0, slot = 'counts', invert = TRUE) 
+Interneurons<-subset(Interneurons, subset = verm > 0, slot = 'counts', invert = TRUE)
+
+##split Interneurons object by sample
+split_Interneurons <- SplitObject(Interneurons, split.by = "sample")
+split_Interneurons <- split_Interneurons[c("VNC1", "VNC2", "VNC3", "VNC4", "VNC5")]
+
+## Normalize and find variable features
+for (sample_name in names(split_Interneurons)) {
+  message("Processing: ", sample_name)
+  
+  split_Interneurons[[sample_name]] <- NormalizeData(split_Interneurons[[sample_name]], verbose = TRUE)
+  
+  split_Interneurons[[sample_name]] <- FindVariableFeatures(
+    split_Interneurons[[sample_name]], 
+    selection.method = "vst", 
+    nfeatures = 1000, 
+    verbose = FALSE
+  )
+}
+
+## select features that are repeatedly variable across datasets for integration
+features <- SelectIntegrationFeatures(object.list = split_Interneurons)
+
+## Perform integration
+Interneurons.anchors <- FindIntegrationAnchors(object.list = split_Interneurons, dims = 1:30)
+
+## create list of common genes to keep
+to_integrate <- Reduce(intersect, lapply(Interneurons.anchors@object.list, rownames))
+
+## integrate data and keep full geneset
+Interneurons.integrated <- IntegrateData(anchorset = Interneurons.anchors)
+
+DefaultAssay(Interneurons) <- "integrated"
+
+##Scale, dimensionality reduction, and clustering analysis
+Interneurons.integrated <- ScaleData(Interneurons, features = rownames(Interneurons))
+
+Interneurons.integrated <- RunPCA(Interneurons.integrated, 
+                                 ndims.print = 1:30, nfeatures.print = 30, npcs = 100)
+
+DimHeatmap(Interneurons.integrated, dims = 1:12, cells = 100, balanced = TRUE)
+DimHeatmap(Interneurons.integrated, dims = 13:25, cells = 100, balanced = TRUE)
+DimHeatmap(Interneurons.integrated, dims = 40:55, cells = 100, balanced = TRUE)
+
+Interneurons.integrated <- JackStraw(Interneurons1, num.replicate = 100)
+Interneurons.integrated <- ScoreJackStraw(Interneurons1, dims = 1:20)
+JackStrawPlot(Interneurons.integrated, dims = 1:20)
+
+ElbowPlot(Interneurons.integrated, ndims = 50)
+
+Interneurons.integrated <- FindNeighbors(Interneurons.integrated, reduction = "pca", dims = 1:50)
+Interneurons.integrated <- RunUMAP(Interneurons.integrated, reduction = "pca", dims = 1:50)
+Interneurons.integrated <- RunTSNE(Interneurons.integrated, reduction = "pca", dims = 1:50)
+
+##Investigating Cluster Separation at Different Resolutions using clustree Package and silhouette metric
+Interneurons.integrated <- FindClusters(Interneurons.integrated, resolution = c(0.8, 1.0 ,1.2, 1.4, 1.5,1.6, 1.8,2.0, 2.2, 2.4, 2.6, 2.8, 3.0, 3.2, 3.4, 3.6, 3.8, 4.0, 4.2, 4.4))
+
+##clustree
+library(clustree)
+clustree(Interneurons.integrated)
+
+## silhouette metric
+library(cluster, quietly = TRUE)
+a<-Embeddings(object = Interneurons.integrated, reduction = "tsne")
+dist.matrix <- dist(x = a)
+clusters <- Interneurons.integrated$seurat_clusters
+sil <- silhouette(x = as.numeric(x = as.factor(x = clusters)), dist = dist.matrix)
+plot(sil)
+plot(sil, col = heat.colors(46))
+##average_sil=0.33
+
+## We decided to use resolution 1.8 for our data
+Interneurons.integrated <- FindClusters(Interneurons.integrated, resolution = 1.8)
+
+DimPlot(Interneurons.integrated, reduction = "tsne", pt.size = 0.9, label = TRUE, label.size = 7)
+
+
+##find marker
+Interneuron.markers <- FindAllMarkers(object = IN, 
+                                      only.pos = TRUE, 
+                                      logfc.threshold = 0.05, assay = 'RNA', slot = c('data'))
+library(readxl)
+library(openxlsx)
+
+top10 <- Interneuron.markers %>% group_by(cluster) %>% top_n(n = 15, wt = avg_logFC)
+
+DoHeatmap(subset(Interneurons.integrated, downsample = 100), features = top10$gene, disp.min = -1.0, disp.max = 1.0) 
+
+ggsave(paste0("~/Desktop/ScRNA seq paper", "in-heat-res1.5.0.png"), height = 116, width = 46, unit = "cm",
+       device = "png", dpi = 600)
+
+##saveRDS
+setwd(".../VNC_atlas")
+
+saveRDS(Interneurons.integrated, file = "IN_VNC.rds")
+
+IN_VNC <- readRDS("IN_VNC.rds")
+
+##Fig.4B_dotplot
+IN_VNC@active.ident <- factor(IN_VNC@active.ident, 
+                          levels=c("1", 
+                                    "44", "41", "36", "45", "32", "35",
+                                    "37","42", "25", "24", "21", "20", "17", "8", "5", "4", "0",
+                                      "9", "34","29","48","47","43","40","39","38","33","31",#Chol #9: no assign
+                                    "30","28","26","23","18","16","15","14","12","11","6","3","2",#Chol
+                                      "10","19","46","27","22","13","7"))#"10" : no assign
+
+
+features =c("VGlut","ChAT", "VAChT", "VGAT", "Gad1", "DAT",  "ple", "SerT", "Hdc", "dimm", "Burs")
+
+DotPlot(IN_VNC, features = features, cols = colorpanel(12,"darkturquoise","yellow","red"), col.min = -1.5, col.max = 1.5)
+
+ggsave(paste0("~/Desktop/", "IN.png"), height = 25, width = 14, unit = "cm", device = "png", dpi = 600)
+
+##
+####Fig.4D
+IN_VNC@active.ident <- factor(IN_VNC@active.ident, 
+                          levels=c("7", "13", "22", "27", "46", "19", "10", "2", "3", "6",
+                                   "11", "12", "14", "15", "16", "18", "23", "26", "28", "30",
+                                   "31", "33", "38", "39", "40", "43", "47", "48", "29", "34",
+                                   "9", "0", "4", "5", "8", "17", "20", "21", "24", "25", "42", "37", "35", "32", "45",
+                                   "36", "41", "44", "1"))
+
+features =c("Dr","ey","mirr", "vnd", "NK7.1", "caup", "ara","unpg", "E5", "ems","acj6", "C15", 
+            "unc-4", "Lim3", "eve","Lim1", "slou","Lmx1a","otp","HGTX", 
+            "exex","tup", "Antp",  "Hmx",  "PHDP", "Drgx","zfh1", "ct", 
+            "pros", "CG4328", "hbn","hth", "Ubx", "zfh2", "pdm3",
+            "Dbx", "Vsx1", "CG18599", "lbl", "toy","dve", "vvl",
+            "CG34367", "inv", "en", "Ptx1","oc","B-H1","nub","ap",
+            "Six4","pdm2")
+
+length(features)
+#
+df1 <- AverageExpression(object = IN,features = features, slot ="scale.data", assays = "integrated")
+
+df1 <- as.data.frame(df1)
+
+library(gplots)
+
+pheatmap(t(df1),
+         breaks=seq(-1.5,1.5,0.1),
+         color=colorpanel(30,"darkturquoise","white","red"),
+         border_color = "grey",
+         cellwidth = 20,
+         cellheight = 20,
+         treeheight_row = 100,
+         treeheight_col = 100,
+         cluster_cols = F,
+         cluster_rows = F,
+         fontsize = 20,
+         angle_col = 90)
+
+##cell annotation
+IN_VNC <- RenameIdents(object = IN_VNC, 
+                   "7"= "Glu-1",
+                   "13"= "Glu-2",
+                   "22"= "Glu-3",
+                   "27"="Glu-4",
+                   "46"="Glu-5",
+                   "19"="Glu-Chol",
+                   "10"="Glu-Mix",
+                   
+                   "2"= "Chol-1",
+                   "3"= "Chol-2",
+                   "6"= "Chol-3",
+                   "11" = "Chol-4",
+                   "12"="Chol-5",
+                   "14"="Chol-6",
+                   "15"="Chol-7",
+                   "16"="Chol-8",
+                   "18"="Chol-9",
+                   "23"="Chol-10",
+                   "26"="Chol-11",
+                   "28"="Chol-12",
+                   "30"="Chol-13",
+                   "31" = "Chol-14",
+                   "33" = "Chol-15",
+                   "38" = "Chol-16",
+                   "39" = "Chol-17",
+                   "40"="Chol-18",
+                   "43" = "Chol-19",
+                   "47"="Chol-20",
+                   "48"="Chol-21",
+                   
+                   "29"="Chol-Mix-1",
+                   
+                   "34"="Chol-Mix-2",
+                   "9"="Chol-Mix-3",
+                   "0"= "Gaba-1",
+                   "4"= "Gaba-2",
+                   "5"= "Gaba-3",
+                   "8" = "Gaba-4",
+                   "17"="Gaba-5",
+                   "20"="Gaba-6",
+                   "21"="Gaba-7",
+                   "24"="Gaba-8",
+                   "25"="Gaba-9",
+                   "42"="Gaba-10",
+                   "37"="Gaba-11",
+                   
+                   "35"="Dop-Gab",
+                   "32"="Ser",
+                   "45"="Hdc",
+                   "36"="dimm-1",
+                   "41"="dimm-2",
+                   "44"="Burs",
+                   "1"="Un")
+
+DimPlot(IN_VNC, reduction = "tsne", label = TRUE)
+
+IN_VNC <-AddMetaData(IN_VNC, metadata = IN@active.ident, col.name = "Celltypes")

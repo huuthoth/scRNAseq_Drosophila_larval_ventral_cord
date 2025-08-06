@@ -1,0 +1,136 @@
+---
+title: "Figure 1"
+output: html_document
+date: "2025-08-03"
+note: The code used in this analysis is associated with the following publications: PMID: 33600085 and PMID: 38569548.
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+## List of the software and algorithms utilized in this protocol
+#R version 3.6.2
+#RStudio version 1.1.463
+#BiocManager version 3.11
+#scater version 1.16.2	
+#DropletUtils version 1.8.0
+#scran version 1.16.0
+#Seurat version 3.1
+#SingleCellExperiment version 1.10.1
+## Install and Load Packages
+library(Seurat)
+library(ggplot2)
+
+
+```{r cars}
+```
+##Load Seurat_VNCs
+setwd("~.../Seurat_VNCs")
+Seurat_VNCs <- readRDS("Seurat_VNCs.rds")
+
+# Celltypes and Cell state identification: After analyzing the highly enriched genes in the initial Seurat clustering, we assigned biological identities to each cluster based on the expression of established marker genes. All cluster identities were then renamed accordingly to reflect their corresponding cell types and states.
+
+Seurat_VNCs <- RenameIdents(object = Seurat_VNCs, 
+                     "25"= "NBs",
+                     "13"= "GMCs",
+                     "8"=  "Hey",
+                     
+                     "19" = "Secondary motor neurons",
+                     "17" = "Motor neurons",
+                     
+                     "10" = "Cortex glia 1",
+                     "27" = "Cortex glia 2",
+                     "14" = "Subperineurial glia",
+                     "20" = "Astrocytes",
+                     "22" = "Midline glia",
+                     
+                     "23"= "Ensheathing glia",
+                     "26" = "Glia precursors",
+                     "16" = "Trachea",
+                     "24"= "Twi+",
+                     "15"= "Unanotated")
+
+
+
+Interneurons <- WhichCells(object = Seurat_VNCs, ident = c("5", "6", "7", "9", "12", "21"))
+Seurat_VNCs <- SetIdent(object = Seurat_VNCs, cells = Interneurons, value="Interneurons")
+
+Secondary neurons_low Imp <- WhichCells(object = Seurat_VNCs, ident = c("1", "2", "0", "3"))
+Seurat_VNCs <- SetIdent(object = Seurat_VNCs, cells = Secondary neurons_low Imp, value="Secondary neurons_low Imp")
+
+Secondary neurons_high Imp <- WhichCells(object = Seurat_VNCs, ident = c("18", "11", "4"))
+Seurat_VNCs <- SetIdent(object = Seurat_VNCs, cells = Secondary neurons_high Imp, value="Secondary neurons_high Imp")
+
+#
+
+##Figure 1B: create a UMAP plot with customized colors 
+DimPlot(object = Seurat_VNCs, reduction = 'umap', label = T,
+        cols = c('NBs' = 'cyan',
+                 "GMCs"= "plum", 
+                 "Hey"= "violetred",
+                 
+                 "Secondary neurons_low Imp"="paleturquoise3",
+                 
+                 "Secondary neurons_high Imp"= "hotpink", 
+                 
+                 "Secondary motor neurons"= "purple3",
+                 
+                 "Interneurons"= "steelblue2",
+                 'Motor neurons' = 'darkcyan',
+                 
+                 "Cortex glia 1"= "darkgoldenrod1",
+                 "Astrocytes"="magenta4",
+                 "Midline glia"="deepskyblue", 
+                 
+                 "Ensheathing glia"= "brown", 
+                 "Cortex glia 2"= "deeppink", 
+                 "Glia precursors"= "blue2", 
+                 "Trachea"="darkorange3",
+                 'Subperineurial glia' = 'slateblue1',
+                 "twi+"="tomato",
+                 "Unanotated"= "lightsteelblue3"),  pt.size = 0.5,  label.size = 7) 
+
+##save UMAP plot
+ggsave(paste0("~.../", "Fig_1B_UMAP.png"), height = 6, width = 10, unit = "in",
+       device = "png", dpi = 600)
+       
+
+##Figure 1C: Dot plot of marker genes for each major cell type
+Seurat_VNCs@active.ident <- factor(Seurat_VNCs@active.ident, 
+                            levels=c("Unanotated",
+                                     "twi+",
+                                     "Trachea",
+                                     
+                                     "Ensheathing glia",
+                                     "Astrocytes",
+                                     "Cortex glia 2",
+                                     "Cortex glia 1",
+                                    
+                                     "Subperineurial glia",
+                                     "Midline glia",
+                                     "Glia precursors",
+                                     
+                                     "Interneurons",
+                                     
+                                     "Motor neurons",
+                                     
+                                     "Secondary motor neurons",
+                                     
+                                     "Secondary neurons_high Imp",
+                                     "Secondary neurons_low Imp",
+                                     "Hey",
+                                     "GMCs",
+                                     "NBs"))
+                                     
+features =c("dpn","mira", "wor",
+            "ase","Hey","pros", "jim", "dati", "mamo","Imp",
+            "twit", "futsch", "VGlut", "Gad1", "ChAT", "DAT",
+            "gcm", "sli", "comm","wrapper",
+            "repo", "Mdr65","zyd", "alrm", "Eaat2",
+             "verm", "twi")
+
+DotPlot(Seurat_VNCs, features = features, cols = c("white","green4"), col.min = -0.3, col.max = 1.5)
+ggsave(paste0("~.../", "Fig_1C_Dotplot.png"), height = 12, width = 25, unit = "cm",
+       device = "png", dpi = 600)
+
+

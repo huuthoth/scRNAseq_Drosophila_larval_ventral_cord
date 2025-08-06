@@ -1,0 +1,156 @@
+---
+title: "Figure 2"
+output: html_document
+date: "2022-06-04"
+note: The code used in this analysis is associated with the following publications: PMID: 33600085 and PMID: 38569548.
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+## List of the software and algorithms utilized in this protocol
+#R version 3.6.2
+#RStudio version 1.1.463
+#BiocManager version 3.11
+#monocle version 2.14.0
+#slingshot version 1.4.0	
+#destiny version 3.0.1	
+#Nebulosa version 0.99.02	
+#scran version 1.16.0
+#Seurat version 3.1
+#SingleCellExperiment version 1.10.1
+## Install and Load Packages
+library(Seurat)
+library(ggplot2)
+library(monocle)
+library(destiny)
+library(Nebulosa)
+
+
+```{r cars}
+```
+
+##Load Seurat_VNCs
+setwd("~.../Seurat_VNCs")
+Seurat_VNCs <- readRDS("Seurat_VNCs.rds")
+
+##Subset secondary neurons 
+newborn_neurons <- subset(Seurat_VNCs, idents = c("secondary low Imp neurons" and "secondary high Imp neurons"))  
+
+DefaultAssay(newborn_neurons) <- "RNA"
+
+##remove unwanted cells
+newborn_neurons<-subset(newborn_neurons, subset = repo > 0, slot = 'counts', invert = TRUE) #17472
+newborn_neurons<-subset(newborn_neurons, subset = wrapper > 0, slot = 'counts', invert = TRUE) #16448
+newborn_neurons<-subset(newborn_neurons, subset = verm > 0, slot = 'counts', invert = TRUE) #16385
+
+newborn_neurons<-subset(newborn_neurons, subset = `N` > 0, slot = 'counts',  invert = TRUE) #3351  cells
+newborn_neurons<-subset(newborn_neurons, subset = `Hey` > 0, slot = 'counts',  invert = TRUE) #3300  cells
+newborn_neurons<-subset(newborn_neurons, subset = `wor` > 0, slot = 'counts',  invert = TRUE) #9821  cells
+newborn_neurons<-subset(newborn_neurons, subset = `cas` > 0, slot = 'counts',  invert = TRUE) #9821  cells
+newborn_neurons<-subset(newborn_neurons, subset = `stg` > 0, slot = 'counts',  invert = TRUE) #9821  cells
+
+
+
+##split newborn_neurons object by sample
+split_newborn_neurons <- SplitObject(newborn_neurons, split.by = "sample")
+split_newborn_neurons <- split_newborn_neurons[c("VNC1", "VNC2", "VNC3", "VNC4", "VNC5")]
+
+## Normalize and find variable features
+for (sample_name in names(split_newborn_neurons)) {
+  message("Processing: ", sample_name)
+  
+  split_newborn_neurons[[sample_name]] <- FindVariableFeatures(
+    split_newborn_neurons[[sample_name]], 
+    selection.method = "vst", 
+    nfeatures = 1000, 
+    verbose = FALSE
+  )
+}
+
+## select features that are repeatedly variable across datasets for integration
+features <- SelectIntegrationFeatures(object.list = split_newborn_neurons)
+
+## Perform integration
+newborn_neurons.anchors <- FindIntegrationAnchors(object.list = split_newborn_neurons, dims = 1:30)
+
+## create list of common genes to keep
+to_integrate <- Reduce(intersect, lapply(newborn_neurons.anchors@object.list, rownames))
+
+## integrate data and keep full geneset
+newborn_neurons <- IntegrateData(anchorset = newborn_neurons.anchors)
+
+DefaultAssay(newborn_neurons) <- "integrated"
+
+##Scale, dimensionality reduction, and clustering analysis
+newborn_neurons <- ScaleData(newborn_neurons, features = rownames(newborn_neurons))
+
+newborn_neurons <- RunPCA(newborn_neurons, features = newborn_neurons@assays$integrated@var.features,
+                                 ndims.print = 1:30, nfeatures.print = 30, npcs = 100)
+
+DimHeatmap(newborn_neurons, dims = 1:12, cells = 100, balanced = TRUE)
+DimHeatmap(newborn_neurons, dims = 13:25, cells = 100, balanced = TRUE)
+DimHeatmap(newborn_neurons, dims = 40:55, cells = 100, balanced = TRUE)
+
+newborn_neurons <- JackStraw(newborn_neurons1, num.replicate = 100)
+newborn_neurons <- ScoreJackStraw(newborn_neurons1, dims = 1:20)
+JackStrawPlot(newborn_neurons, dims = 1:20)
+
+ElbowPlot(newborn_neurons, ndims = 50)
+
+newborn_neurons <- RunUMAP(newborn_neurons, reduction = "pca", dims = 1:30)
+
+newborn_neurons <- RunTSNE(newborn_neurons, reduction = "pca", dims = 1:30)
+
+newborn_neurons <- FindNeighbors(newborn_neurons, reduction = "pca", dims = 1:30)
+
+newborn_neurons <- FindClusters(newborn_neurons, resolution = 1.0)
+
+DimPlot(newborn_neurons, reduction = "umap", label = TRUE)
+DimPlot(newborn_neurons, reduction = "umap", label = TRUE, split.by = "sample")
+
+plot_density(newborn_neurons, "VGlut", reduction = "umap")
+plot_density(newborn_neurons, "ChAT", reduction = "umap")
+plot_density(newborn_neurons, "Gad1", reduction = "umap")
+plot_density(newborn_neurons, "Hey", reduction = "umap")
+
+##
+setwd("~.../newborn_neurons")
+
+saveRDS(newborn_neurons, file = "newborn_neurons.rds")
+
+##Different expression analysis
+newborn_neurons.markers <- FindAllMarkers(newborn_neurons, logfc.threshold = 0.25, test.use = "wilcox", assay="RNA")
+
+##
+library(ELeFHAnt)
+#
+
+newborn_neurons <- readRDS("newborn_neurons.rds")
+DimPlot(newborn_neurons, reduction = "tsne", label = TRUE)
+
+
+##Use Adult VNC data as reference
+setwd("../Adult_VNC")
+reference = readRDS("Adult_VNC.rds")
+VNC.Adult$Celltypes <- VNC.Adult$seurat_clusters
+newborn_neurons$Celltypes <- newborn_neurons$seurat_clusters
+
+start_time <- Sys.time()
+
+out.ELeFHAnt <- CelltypeAnnotation(reference = VNC.Adult, query = newborn_neurons, downsample = FALSE, classification.method = "Ensemble", validatePredictions=FALSE)
+
+
+p1 = DimPlot(out.ELeFHAnt, group.by = "PredictedCelltype_UsingEnsemble", label=T, repel = T, reduction = "umap", pt.size=2) + NoLegend() + ggtitle("ELeFHAnt Predictions")
+ggsave(paste0("~/Desktop/", "out.ELeFHAnt.png"), height = 4, width = 5, unit = "in", device = "png", dpi = 600)
+
+
+saveRDS(out.ELeFHAnt, file = 'Newborn_adult_neurons.annotated.ELeFHAnt.rds')
+
+out.ELeFHAnt <- readRDS("Newborn_adult_neurons.annotated.ELeFHAnt.rds")
+
+
+##ELeFHAnt Deduce Relationship
+
+out = DeduceRelationship(reference1 = VNC.Adult, reference2 = newborn_neurons, downsample = TRUE, downsample_to = 100, classification.method = "Ensemble", crossvalidationSVM = 5, selectvarfeatures = 2000)
+
